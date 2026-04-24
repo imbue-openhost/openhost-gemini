@@ -13,8 +13,9 @@
 #   3. Make sure the certs dir exists. Agate generates a self-signed
 #      ECDSA P-256 cert for the hostname on first boot if no cert is
 #      found; subsequent boots reuse the existing cert/key.
-#   4. Launch the HTTP status sidecar on :${STATUS_PORT:-8080} for
-#      the OpenHost router's health-check + landing page.
+#   4. Launch the HTTP sidecar (Starlette + Uvicorn) on
+#      :${STATUS_PORT:-8080} for the OpenHost router's health-check,
+#      landing page, and WYSIWYG editor.
 #   5. Launch agate in the foreground as an unprivileged user.
 #   6. Supervise both children: if either exits, kill the other and
 #      exit so OpenHost restarts the container.
@@ -103,9 +104,19 @@ STATUS_PID=""
 AGATE_PID=""
 trap 'kill -TERM ${AGATE_PID:-} ${STATUS_PID:-} 2>/dev/null; wait' TERM INT
 
-log "starting HTTP status sidecar on :$STATUS_PORT"
-python3 /usr/local/bin/status_server.py &
+log "starting HTTP sidecar on :$STATUS_PORT"
+# Launch via uvicorn so we get HTTP/1.1 keep-alive, proper graceful
+# shutdown on SIGTERM, and async file IO. The sidecar reads
+# OPENHOST_APP_DATA_DIR and GEMINI_RESOLVED_HOSTNAME from the
+# environment we just exported.
+cd /usr/local/share/openhost-gemini/sidecar
+python3 -m uvicorn server:app \
+    --host 0.0.0.0 \
+    --port "$STATUS_PORT" \
+    --log-level info \
+    --no-access-log &
 STATUS_PID=$!
+cd - >/dev/null
 
 log "starting agate for $HOSTNAME on :1965"
 # --skip-port-check: OpenHost may publish us on a host port other

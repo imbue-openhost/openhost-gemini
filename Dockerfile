@@ -8,10 +8,10 @@
 # toolchain through the layer.
 #
 # Base image: Debian 12 slim. We need a modern glibc (agate is linked
-# against glibc 2.35+), openssl for cert generation, python3 for the
-# tiny status/landing sidecar, curl+ca-certs for downloading the
-# agate release, and tini so SIGTERM from `docker stop` reaches both
-# children via our start.sh supervisor.
+# against glibc 2.35+), curl+ca-certs for downloading the agate
+# release, python3 + Starlette/Uvicorn for the HTTP sidecar (landing,
+# health-check, and WYSIWYG editor), and tini so SIGTERM from
+# `docker stop` reaches both children via our start.sh supervisor.
 FROM debian:bookworm-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -26,8 +26,21 @@ ARG AGATE_SHA256=18773fa82b70160e77a64c788647c8e252f06e9bc2cd3f1cacea2e159206b0e
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-        ca-certificates curl openssl python3 tini \
+        ca-certificates curl python3 python3-pip tini \
  && rm -rf /var/lib/apt/lists/*
+
+# Pin Starlette + Uvicorn versions so the editor's behaviour can't
+# silently change under a transitive update. Both are small, well-known
+# Python web frameworks; we use Starlette directly (not FastAPI) to
+# keep the dependency footprint minimal.
+#
+# --break-system-packages is needed because Debian 12's pip refuses
+# global installs without it (PEP 668). We install into the system
+# site-packages deliberately because there is exactly one Python
+# program in this container and a venv would just add unused layers.
+RUN pip3 install --no-cache-dir --break-system-packages \
+        "starlette==0.41.3" \
+        "uvicorn[standard]==0.32.1"
 
 RUN set -eux; \
     url="https://github.com/mbrubeck/agate/releases/download/v${AGATE_VERSION}/agate.x86_64-unknown-linux-gnu.gz"; \
@@ -38,15 +51,14 @@ RUN set -eux; \
     chmod 755 /usr/local/bin/agate; \
     /usr/local/bin/agate --version
 
-# Bundled assets: the entrypoint and the HTTP status sidecar. The
-# default gemtext index gets copied into $OPENHOST_APP_DATA_DIR/content/
-# on first boot only, so an operator editing index.gmi inside the
-# persistent volume won't have their edits overwritten by a later image
-# update.
+# Bundled assets: the entrypoint, the HTTP sidecar (Starlette app +
+# its templates and static files), and the default gemtext content
+# that gets copied into $OPENHOST_APP_DATA_DIR/content/ on first boot
+# only (so operator edits are never overwritten).
 COPY start.sh /usr/local/bin/start.sh
-COPY status_server.py /usr/local/bin/status_server.py
+COPY sidecar/ /usr/local/share/openhost-gemini/sidecar/
 COPY default_content/ /usr/local/share/openhost-gemini/default_content/
-RUN chmod +x /usr/local/bin/start.sh /usr/local/bin/status_server.py
+RUN chmod +x /usr/local/bin/start.sh
 
 # Create an unprivileged user for agate to drop to. Agate itself does
 # not daemonise or drop privileges, so running as root would be
@@ -54,10 +66,11 @@ RUN chmod +x /usr/local/bin/start.sh /usr/local/bin/status_server.py
 # correct under both runtimes.
 RUN useradd --system --no-create-home --shell /usr/sbin/nologin agate
 
-# :8080 is the HTTP landing/health port (reached via the OpenHost
-# router). :1965 is the Gemini port (published directly on the host by
-# OpenHost via the [[ports]] entry in openhost.toml). We document both
-# via EXPOSE so `docker inspect` reflects intent.
+# :8080 is the HTTP landing/health/editor port (reached via the
+# OpenHost router; gated by OpenHost session auth). :1965 is the
+# Gemini port (published directly on the host by OpenHost via the
+# [[ports]] entry in openhost.toml). We document both via EXPOSE so
+# `docker inspect` reflects intent.
 EXPOSE 8080 1965
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
