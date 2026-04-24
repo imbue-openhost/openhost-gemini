@@ -14,7 +14,7 @@
 // closing ``` toggle. There is no inline markup.
 //
 // This editor maps each line shape to a single DOM block in a
-// contenteditable host. Saving serialises the DOM back to gemtext;
+// contenteditable host. Saving serializes the DOM back to gemtext;
 // loading parses gemtext into the DOM. The mapping is one-to-one so
 // edits are non-destructive: re-loading what you just saved gives the
 // same DOM you started with.
@@ -126,7 +126,7 @@ export function parseGemtext(src) {
 
 // -------------------------------------------------------------- serializer
 
-// Serialise an array of records back to gemtext. The exact inverse of
+// Serialize an array of records back to gemtext. The exact inverse of
 // parseGemtext for the line shapes it produces.
 export function serializeGemtext(records) {
     const lines = [];
@@ -161,7 +161,7 @@ export function serializeGemtext(records) {
 
 // Render an array of records into the editor's contenteditable host.
 // Each record becomes one block element with data-shape= so we can
-// serialise back without inferring shape from tag alone (multiple
+// serialize back without inferring shape from tag alone (multiple
 // shapes share tags, e.g. a `> quote` is a `<div>` to keep CSS clean).
 function recordsToDOM(host, records) {
     while (host.firstChild) host.removeChild(host.firstChild);
@@ -272,7 +272,7 @@ class Editor {
         this.setStatus("Loaded " + path);
     }
 
-    serialise() {
+    serialize() {
         return serializeGemtext(domToRecords(this.host));
     }
 
@@ -345,9 +345,7 @@ class Editor {
             }
             nextShape = Lines.LIST;
         }
-        const newBlock = blockFor(
-            nextShape === Lines.LIST ? {shape: nextShape, text: ""} : {shape: nextShape, text: ""}
-        );
+        const newBlock = blockFor({shape: nextShape, text: ""});
         block.after(newBlock);
         const range = document.createRange();
         range.selectNodeContents(newBlock);
@@ -361,27 +359,48 @@ class Editor {
 
 // ----------------------------------------------------------------- API client
 
-async function fetchJSON(url, opts = {}) {
+// Encode a path while preserving "/" separators. encodeURIComponent
+// alone would escape slashes (% 2F), and Starlette's `{rel:path}`
+// converter would receive the percent-encoded form -- which fails
+// our `_VALID_RELPATH_RE` validation and 400s every subdirectory
+// file. Encode each segment individually instead.
+function encodePath(p) {
+    return p.split("/").map(encodeURIComponent).join("/");
+}
+
+// All API helpers go through this single fetch wrapper so credentials
+// handling, error formatting, and JSON parsing live in one place.
+// `parse` controls what we read off the response: "json" for normal
+// endpoints, "none" for endpoints (like DELETE) that return an empty
+// body. We always read the response body on a non-OK status so the
+// thrown Error includes the server's text/JSON error detail.
+async function apiFetch(url, opts = {}, parse = "json") {
     const r = await fetch(url, {credentials: "same-origin", ...opts});
     if (!r.ok) {
-        const text = await r.text();
-        throw new Error(`${r.status} ${r.statusText}: ${text}`);
+        let detail = "";
+        try {
+            detail = await r.text();
+        } catch (_) {
+            // Body already consumed or network error; nothing to add.
+        }
+        throw new Error(`${r.status} ${r.statusText}: ${detail}`);
     }
+    if (parse === "none") return null;
     return await r.json();
 }
 
 async function listFiles() {
-    const data = await fetchJSON("/api/files");
+    const data = await apiFetch("/api/files");
     return data.files;
 }
 
 async function loadFile(path) {
-    const data = await fetchJSON("/api/files/" + encodeURIComponent(path));
+    const data = await apiFetch("/api/files/" + encodePath(path));
     return data.content;
 }
 
 async function saveFile(path, content) {
-    return await fetchJSON("/api/files/" + encodeURIComponent(path), {
+    return await apiFetch("/api/files/" + encodePath(path), {
         method: "PUT",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({content}),
@@ -389,7 +408,7 @@ async function saveFile(path, content) {
 }
 
 async function createFile(path) {
-    return await fetchJSON("/api/files/" + encodeURIComponent(path), {
+    return await apiFetch("/api/files/" + encodePath(path), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({content: ""}),
@@ -397,14 +416,9 @@ async function createFile(path) {
 }
 
 async function deleteFile(path) {
-    const r = await fetch("/api/files/" + encodeURIComponent(path), {
+    return await apiFetch("/api/files/" + encodePath(path), {
         method: "DELETE",
-        credentials: "same-origin",
-    });
-    if (!r.ok) {
-        const text = await r.text();
-        throw new Error(`${r.status} ${r.statusText}: ${text}`);
-    }
+    }, "none");
 }
 
 // ----------------------------------------------------------------- UI wiring
@@ -466,8 +480,21 @@ async function init() {
 
     document.getElementById("btn-save").addEventListener("click", async () => {
         if (!currentFile) return;
+        // Pre-save validation: an empty link URL would serialize to
+        // `=> ` which is invalid per the Gemini spec and silently
+        // dropped or mis-rendered by clients. Refuse the save and
+        // tell the user instead.
+        const records = parseGemtext(editor.serialize());
+        const badLink = records.find(r => r.shape === Lines.LINK && !r.url.trim());
+        if (badLink) {
+            editor.setStatus(
+                "Cannot save: a link block has an empty URL. Fill it in or change the block to a paragraph.",
+                "err",
+            );
+            return;
+        }
         try {
-            const body = editor.serialise();
+            const body = editor.serialize();
             await saveFile(currentFile, body);
             editor.markSaved();
         } catch (err) {
@@ -505,8 +532,16 @@ async function init() {
 
     document.getElementById("btn-source").addEventListener("click", () => {
         if (!currentFile) return;
-        const body = editor.serialise();
+        const body = editor.serialize();
         const w = window.open("", "_blank");
+        // Browsers block popups for non-user-initiated opens or
+        // popup-blocked tabs; window.open returns null in that case.
+        // Surface a clear error in the editor status bar instead of
+        // crashing on `w.document` deref.
+        if (w === null) {
+            editor.setStatus("View source: popup blocked. Allow popups for this site.", "err");
+            return;
+        }
         w.document.write("<pre>" + body.replace(/[<>&]/g, c => ({"<": "&lt;", ">": "&gt;", "&": "&amp;"}[c])) + "</pre>");
         w.document.close();
     });

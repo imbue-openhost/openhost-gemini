@@ -136,18 +136,40 @@ def _resolve_content_path(rel: str) -> Path:
 
 
 def _list_gmi_files() -> list[str]:
-    """Return relative paths of ``.gmi`` files under CONTENT_DIR, sorted."""
+    """Return relative paths of ``.gmi`` regular files under
+    ``CONTENT_DIR``, sorted. Symlinks (in or out of bounds) are
+    skipped: the editor refuses to read or write through symlinks at
+    the per-file API, so listing them in the sidebar would just give
+    the user clickable entries that 400.
+
+    Errors traversing the directory propagate as HTTPException(500)
+    with the underlying ``OSError`` message, mirroring how every
+    other file-IO call in this module reports failures.
+    """
     if not CONTENT_DIR.is_dir():
         return []
     paths: list[str] = []
-    for entry in CONTENT_DIR.rglob("*.gmi"):
-        if not entry.is_file():
+    try:
+        entries = list(CONTENT_DIR.rglob("*.gmi"))
+    except OSError as exc:
+        raise HTTPException(500, f"failed to list content dir: {exc}")
+    for entry in entries:
+        # is_symlink first so a dangling symlink doesn't trip is_file.
+        if entry.is_symlink():
             continue
         try:
-            rel = entry.resolve().relative_to(CONTENT_DIR)
+            if not entry.is_file():
+                continue
+        except OSError:
+            # A subtree we can't stat (e.g. permission flip mid-walk)
+            # is not actionable; skip the entry rather than aborting
+            # the whole list.
+            continue
+        try:
+            rel = entry.relative_to(CONTENT_DIR)
         except ValueError:
-            # Symlink that points outside CONTENT_DIR -- skip rather
-            # than expose an out-of-bounds path through the API.
+            # Should not happen for a non-symlink under CONTENT_DIR,
+            # but be defensive.
             continue
         paths.append(str(rel))
     paths.sort()
@@ -239,7 +261,14 @@ async def healthz(request: Request) -> Response:
 async def edit_page(request: Request) -> HTMLResponse:
     """Serve the editor shell. The actual content + file list is
     populated by ``editor.js`` calling ``/api/files``."""
-    template = (TEMPLATES_DIR / "editor.html").read_text(encoding="utf-8")
+    try:
+        template = (TEMPLATES_DIR / "editor.html").read_text(encoding="utf-8")
+    except OSError as exc:
+        # Should be impossible at runtime (the file is COPYed into the
+        # image), but a broken build or hand-mounted volume could
+        # remove it. Surface a 500 with context instead of letting an
+        # unhandled exception become an opaque ASGI traceback.
+        raise HTTPException(500, f"editor template missing: {exc}")
     return HTMLResponse(template, headers={"Cache-Control": "no-store"})
 
 
@@ -280,10 +309,24 @@ async def _read_json_body(request: Request) -> dict[str, Any]:
     return data
 
 
-def _validate_content(value: Any) -> str:
+def _validate_content(value: Any, *, missing_message: str = "missing 'content' field") -> str:
+    """Validate that ``value`` is a UTF-8-encodable string under the
+    file size cap. Raises HTTPException with a 4xx detail on rejection.
+
+    Distinguishes ``None`` (key absent) from a non-string value so the
+    error message matches the user's actual mistake.
+    """
+    if value is None:
+        raise HTTPException(400, missing_message)
     if not isinstance(value, str):
         raise HTTPException(400, "'content' must be a string")
-    encoded = value.encode("utf-8")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        # Python str can hold lone surrogates that JSON allows but
+        # UTF-8 cannot encode; reject with a clear 400 instead of
+        # letting the unhandled exception become a 500.
+        raise HTTPException(400, f"content is not valid UTF-8: {exc}")
     if len(encoded) > MAX_FILE_BYTES:
         raise HTTPException(413, f"content exceeds {MAX_FILE_BYTES} bytes")
     return value
@@ -303,7 +346,10 @@ async def put_file(request: Request) -> JSONResponse:
         raise HTTPException(400, "path is not a regular file")
 
     data = await _read_json_body(request)
-    content = _validate_content(data.get("content"))
+    content = _validate_content(
+        data.get("content"),
+        missing_message="missing 'content' field (use POST to create new files with default content)",
+    )
 
     # Atomic write: write to a sibling tempfile in the same dir then
     # replace, so a crash mid-write doesn't truncate the existing

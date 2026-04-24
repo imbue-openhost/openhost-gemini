@@ -58,9 +58,9 @@ gemtext line shapes one-to-one to DOM blocks:
 | `## Heading` | Heading 2    |
 | `### Heading` | Heading 3   |
 | `* item` | List item        |
-| `> quote` | Block quote     |
-| `=> URL label` | Link card  |
-| ` ``` ` | Preformatted block |
+| `> quote` | Quote           |
+| `=> URL label` | Link        |
+| ` ``` ` | Preformatted     |
 | anything else | Paragraph   |
 
 Use the toolbar to change a block's shape. The "View source" button
@@ -76,9 +76,10 @@ The file API the editor uses is also addressable directly:
 - `POST /api/files/<path>` — create a new file.
 - `DELETE /api/files/<path>` — remove a file.
 
-All file API endpoints accept and produce JSON, are confined to the
-content dir (path traversal and symlinks rejected), and require an
-OpenHost session.
+All file API endpoints other than `DELETE` (which returns `204 No
+Content` on success) produce JSON. All endpoints are confined to the
+content dir (path traversal and symlinks rejected), and all require
+an OpenHost session.
 
 ## Customising
 

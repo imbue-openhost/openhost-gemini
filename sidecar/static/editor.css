@@ -1,5 +1,5 @@
 /* Editor / file-list styling. Matches the dark palette of the
-   landing page in templates/landing.html. */
+   inline landing-page template in sidecar/server.py. */
 
 * { box-sizing: border-box; }
 

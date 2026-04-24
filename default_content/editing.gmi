@@ -1,16 +1,31 @@
 # Editing this capsule
 
 The server reads .gmi files directly off disk -- no rebuild required
-after editing. There are two ways to change what this capsule serves:
+after editing. Three ways to change what this capsule serves:
 
-## 1. File-browser app (easy)
+## 1. Built-in WYSIWYG editor (recommended)
 
-If you have the openhost-filestash (or equivalent) file-browser app
-installed in this compute space, open it and navigate to the
-"gemini" app's data directory. You'll find a "content/" folder with
-the .gmi files you see here. Edit, save, refresh your Gemini client.
+Sign in to your OpenHost compute space, then open:
 
-## 2. oh app exec (power user)
+=> /edit Open the editor
+
+You'll get a sidebar with all .gmi files and a contenteditable view
+that maps gemtext line shapes to editor blocks (heading, quote, list
+item, link, preformatted). Hit Save and agate serves the new content
+on the next request.
+
+The editor lives at the HTTP side of this app (not the Gemini side),
+behind the OpenHost session, so only the compute-space owner can use
+it.
+
+## 2. File-browser app
+
+If you have the file-browser app installed in this compute space,
+open it and navigate to the "gemini" app's data directory. You'll
+find a "content/" folder with the .gmi files you see here. Edit,
+save, refresh your Gemini client.
+
+## 3. oh app exec (power user)
 
 You can edit files directly from the shell using the OpenHost CLI:
 
