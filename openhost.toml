@@ -24,11 +24,14 @@ container_port = 1965
 host_port = 1965
 
 [routing]
-# The HTTP landing page is gated behind the OpenHost session so only
-# the compute-space owner sees it. The capsule itself (the Gemini
-# protocol on :1965) is publicly reachable without OpenHost auth --
-# that's the normal Gemini access model -- but the HTTP-side info
-# page does not need to be world-readable.
+# The HTTP landing page at "/" is public so anyone who follows the
+# https://<app>.<zone>/ link learns this is a Gemini capsule and
+# how to install a Gemini client. The health endpoint is public for
+# the same reason most simple monitoring hits it without auth. The
+# editor at /edit and its file API at /api/* stay behind the
+# OpenHost session (no entry here) so only the compute-space owner
+# can use them.
+public_paths = ["/", "/healthz"]
 health_check = "/healthz"
 
 [resources]

@@ -203,48 +203,50 @@ _LANDING_TEMPLATE = """<!doctype html>
             border-radius:4px; }}
     .card {{ background:#161b22; border:1px solid #30363d; border-radius:8px;
              padding:16px 20px; margin:16px 0; }}
-    .status-ok {{ color:#2ea043; font-weight:600; }}
-    .status-bad {{ color:#f85149; font-weight:600; }}
     ul {{ padding-left: 1.4em; }}
     li {{ margin: 0.3em 0; }}
     a {{ color:#58a6ff; }}
-    .cta {{
-      display: inline-block; background:#1f6feb; color:#fff;
-      text-decoration: none; padding: 8px 16px; border-radius: 6px;
-      font-weight: 600;
-    }}
-    .cta:hover {{ background:#388bfd; }}
   </style>
 </head>
 <body>
   <h1>Gemini Capsule</h1>
 
   <div class="card">
-    <p>Agate status: <span class="{status_class}">{status_text}</span></p>
-  </div>
-
-  <div class="card">
-    <h2>Browsing</h2>
-    <p>This is the HTTP landing page for a Gemini capsule. Gemini is a
-       separate protocol from HTTP; point a Gemini client at:</p>
+    <p>You've reached the HTTPS side of a Gemini capsule. Gemini is a
+       lightweight internet protocol that runs alongside HTTP, with
+       its own URL scheme, content type (gemtext), and clients. To
+       browse this capsule, point a Gemini client at:</p>
     <p><code>gemini://{host}/</code></p>
-    <p>Some desktop and mobile clients:</p>
-    <ul>
-      <li><a href="https://lagrange.skyjake.fi/">Lagrange</a> (macOS, Linux, Windows, iOS, Android)</li>
-      <li><a href="https://github.com/makew0rld/amfora">Amfora</a> (terminal, cross-platform)</li>
-    </ul>
-    <p>The server uses a self-signed TLS certificate, which is standard
-       for Gemini. Your client will prompt you to trust it on first
-       connect (Trust On First Use).</p>
   </div>
 
   <div class="card">
-    <h2>Editing content</h2>
-    <p>Edit your capsule's gemtext pages with the built-in WYSIWYG
-       editor:</p>
-    <p><a class="cta" href="/edit">Open editor</a></p>
-    <p>(Or edit the files directly via the file-browser app; they
-       live under <code>$OPENHOST_APP_DATA_DIR/content/</code>.)</p>
+    <h2>Getting a Gemini client</h2>
+    <p>Gemini clients are small and free. A few popular ones:</p>
+    <ul>
+      <li><a href="https://lagrange.skyjake.fi/">Lagrange</a> -- desktop and mobile (macOS, Linux, Windows, iOS, Android).</li>
+      <li><a href="https://github.com/makew0rld/amfora">Amfora</a> -- terminal-based, cross-platform.</li>
+      <li><a href="https://geminiprotocol.net/clients.gmi">Full client list</a> on the Gemini protocol site.</li>
+    </ul>
+    <p>Most clients let you paste the <code>gemini://</code> URL above
+       directly into their address bar.</p>
+  </div>
+
+  <div class="card">
+    <h2>About the certificate</h2>
+    <p>Gemini servers use TLS, but the certificates are typically
+       self-signed and trusted by clients on first connect (TOFU --
+       Trust On First Use), not signed by a public CA. When you visit
+       this capsule, your Gemini client will ask you to confirm the
+       certificate the first time. That is normal.</p>
+  </div>
+
+  <div class="card">
+    <h2>What is Gemini?</h2>
+    <p>Gemini is an alternative to the modern web. It serves text-first
+       documents over a simple line-oriented protocol. There is no
+       JavaScript, no tracking, no ads, and the markup language
+       (gemtext) has six line shapes total. Read more at the
+       <a href="https://geminiprotocol.net/">Gemini protocol site</a>.</p>
   </div>
 </body>
 </html>
@@ -252,10 +254,7 @@ _LANDING_TEMPLATE = """<!doctype html>
 
 
 async def landing(request: Request) -> HTMLResponse:
-    up = await _agate_up()
     body = _LANDING_TEMPLATE.format(
-        status_class="status-ok" if up else "status-bad",
-        status_text="running" if up else "not listening on 1965 (still starting?)",
         host=html.escape(_safe_hostname(), quote=True),
     )
     return HTMLResponse(body, headers={"Cache-Control": "no-store"})

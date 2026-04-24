@@ -8,14 +8,15 @@ with a built-in WYSIWYG editor for the capsule's gemtext pages.
 
 - A public Gemini capsule reachable at `gemini://<app-name>.<zone-domain>/`
   (conventionally `gemini://gemini.<zone>/`).
-- A small HTTP landing page at `https://<app-name>.<zone-domain>/`
-  for visitors who hit it over the web, explaining how to point a
-  Gemini client at the capsule.
+- A public HTTPS landing page at `https://<app-name>.<zone-domain>/`
+  that explains what a Gemini capsule is and how to install a Gemini
+  client. Reachable without an OpenHost session so visitors who
+  follow a link to the HTTPS URL learn what to do.
 - A WYSIWYG gemtext editor at `https://<app-name>.<zone-domain>/edit`
   for managing the capsule's pages from the browser. Behind the
   OpenHost session, so only the compute-space owner can use it.
 - Persistent content under `$OPENHOST_APP_DATA_DIR/content/` that
-  you edit via the editor, the file-browser app, or `oh app exec`.
+  you edit via the editor or the file-browser app.
 - A self-signed TLS certificate, auto-generated on first boot and
   reused across restarts.
 
@@ -127,9 +128,14 @@ disk); your edits survive container rebuilds.
 - The Gemini port (1965) is publicly reachable with no OpenHost auth
   gate -- this is the normal access model for a Gemini capsule. Do
   not put anything sensitive in the content dir.
-- All HTTP routes (landing page, editor, file API) are gated behind
-  the OpenHost session (no `public_paths`), so only the compute-space
-  owner can use them. Random web visitors get OpenHost's standard
+- The HTTPS landing page at `/` and the health endpoint `/healthz`
+  are listed in `public_paths`, so anyone who follows the HTTPS URL
+  sees the "this is a Gemini capsule, here's how to install a
+  client" page. The landing page does not link to or hint at the
+  editor, and it does not reveal the agate process status.
+- The editor at `/edit` and the file API under `/api/files/...`
+  stay behind the OpenHost session, so only the compute-space owner
+  can use them. Unauthenticated visitors get OpenHost's standard
   sign-in redirect.
 - The file API rejects path traversal, absolute paths, symlinks, and
   any extension other than `.gmi`. Bodies are capped at 1 MiB.
