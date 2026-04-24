@@ -10,7 +10,7 @@
   <div class="app">
     <header class="topbar">
       <h1>Capsule editor</h1>
-      <span style="color:#8b949e; font-size:13px;" id="current-file">(no file)</span>
+      <span class="filename" id="current-file">(no file)</span>
       <span class="spacer"></span>
       <a href="/">Back to landing</a>
     </header>
@@ -25,14 +25,19 @@
 
     <section class="main">
       <div class="toolbar">
-        <div id="shape-bar"></div>
+        <span class="hint">Edit gemtext directly. <a href="https://geminiprotocol.net/docs/gemtext-specification.gmi" target="_blank" rel="noopener">Gemtext reference</a>.</span>
         <span class="spacer"></span>
-        <button id="btn-source" type="button" class="shape-btn">View source</button>
-        <button id="btn-save" type="button" class="shape-btn">Save</button>
+        <button id="btn-save" type="button" class="primary">Save</button>
         <span id="editor-status" class="editor-status">No file loaded</span>
       </div>
       <div class="editor-host-wrap">
-        <div id="editor-host" contenteditable="true" spellcheck="true"></div>
+        <textarea id="editor-host"
+                  spellcheck="true"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="off"
+                  wrap="soft"
+                  placeholder="Pick a file from the sidebar or click 'New file' to start."></textarea>
       </div>
     </section>
   </div>

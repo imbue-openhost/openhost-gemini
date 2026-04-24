@@ -2,7 +2,7 @@
 
 A [Gemini protocol](https://geminiprotocol.net/) capsule, packaged
 as an OpenHost app. Built around [agate](https://github.com/mbrubeck/agate),
-with a built-in WYSIWYG editor for the capsule's gemtext pages.
+with a built-in source editor for the capsule's gemtext pages.
 
 ## What you get
 
@@ -12,7 +12,7 @@ with a built-in WYSIWYG editor for the capsule's gemtext pages.
   that explains what a Gemini capsule is and how to install a Gemini
   client. Reachable without an OpenHost session so visitors who
   follow a link to the HTTPS URL learn what to do.
-- A WYSIWYG gemtext editor at `https://<app-name>.<zone-domain>/edit`
+- A gemtext source editor at `https://<app-name>.<zone-domain>/edit`
   for managing the capsule's pages from the browser. Behind the
   OpenHost session, so only the compute-space owner can use it.
   The owner sees an extra "Open editor" card on the landing page
@@ -57,31 +57,13 @@ landing page at `https://<app-name>.<zone-domain>/` grows an extra
 "Open editor" card. Click it (or visit `/edit` directly) to open
 the editor.
 
-The editor is a contenteditable WYSIWYG host that maps gemtext
-line shapes one-to-one to DOM blocks:
-
-| Gemtext   | Editor block    |
-|-----------|-----------------|
-| `# Heading` | Heading 1     |
-| `## Heading` | Heading 2    |
-| `### Heading` | Heading 3   |
-| `* item` | List item        |
-| `> quote` | Quote           |
-| `=> URL label` | Link        |
-| ` ``` ` | Preformatted     |
-| anything else | Paragraph   |
-
-Use the toolbar to change a block's shape. The "View source" button
-shows the current gemtext that will be saved. Save commits the file
-to disk; agate re-reads it on the next request, so changes are live
-without a restart.
-
-Pasting from a webpage, Markdown preview, or word processor works:
-the editor intercepts the paste, parses the clipboard HTML, and
-inserts proper gemtext blocks (headings, lists, paragraphs, links,
-quotes, preformatted) instead of dumping raw HTML into the
-contenteditable. Inline links in pasted prose become "label (URL)"
-text rather than getting dropped, so URLs survive the paste.
+The editor is a plain gemtext source editor: a textarea with
+monospace font on the right and a file list on the left. Type
+gemtext directly. Save (or Ctrl/Cmd+S) writes to disk; agate
+re-reads files on the next request, so changes are live without a
+restart. The toolbar links to the
+[gemtext spec](https://geminiprotocol.net/docs/gemtext-specification.gmi)
+if you need a reminder of the line shapes.
 
 The file API the editor uses is also addressable directly:
 
