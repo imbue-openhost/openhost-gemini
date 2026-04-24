@@ -24,14 +24,17 @@ container_port = 1965
 host_port = 1965
 
 [routing]
-# The HTTP landing page at "/" is public so anyone who follows the
-# https://<app>.<zone>/ link learns this is a Gemini capsule and
-# how to install a Gemini client. The health endpoint is public for
-# the same reason most simple monitoring hits it without auth. The
-# editor at /edit and its file API at /api/* stay behind the
-# OpenHost session (no entry here) so only the compute-space owner
-# can use them.
-public_paths = ["/", "/healthz"]
+# OpenHost's public_paths matcher treats each entry as a prefix:
+# `pp = "/"` matches every URL on the app, and there is no path
+# you can list to mean "just the bare slash". We need both a
+# public landing page at "/" AND a private editor at "/edit", so
+# we tell OpenHost everything is public ("/") and do the editor
+# auth ourselves inside the sidecar -- which checks for the
+# `X-OpenHost-Is-Owner: true` header that OpenHost forwards on
+# authenticated-owner requests. Unauthenticated requests reach
+# us with no such header, so the sidecar rejects /edit and
+# /api/files/* before they do anything.
+public_paths = ["/"]
 health_check = "/healthz"
 
 [resources]

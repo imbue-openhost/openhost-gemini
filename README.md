@@ -129,14 +129,19 @@ disk); your edits survive container rebuilds.
   gate -- this is the normal access model for a Gemini capsule. Do
   not put anything sensitive in the content dir.
 - The HTTPS landing page at `/` and the health endpoint `/healthz`
-  are listed in `public_paths`, so anyone who follows the HTTPS URL
-  sees the "this is a Gemini capsule, here's how to install a
-  client" page. The landing page does not link to or hint at the
-  editor, and it does not reveal the agate process status.
+  are public so anyone who follows the HTTPS URL sees the "this is
+  a Gemini capsule, here's how to install a client" page. The
+  landing page does not link to or hint at the editor.
 - The editor at `/edit` and the file API under `/api/files/...`
-  stay behind the OpenHost session, so only the compute-space owner
-  can use them. Unauthenticated visitors get OpenHost's standard
-  sign-in redirect.
+  are gated by the sidecar itself: it accepts these requests only
+  when OpenHost has stamped the proxied request with
+  `X-OpenHost-Is-Owner: true`, which OpenHost adds for the
+  authenticated compute-space owner. Anonymous browser requests get
+  redirected to the OpenHost sign-in page; anonymous API requests
+  get a `401`. (The check is done in-app rather than via OpenHost's
+  `public_paths` list because OpenHost's path matcher treats `/`
+  as a prefix that matches every URL, so a bare-`/` public entry
+  would expose the editor too.)
 - The file API rejects path traversal, absolute paths, symlinks, and
   any extension other than `.gmi`. Bodies are capped at 1 MiB.
 - The container runs agate as the in-container root user; under the

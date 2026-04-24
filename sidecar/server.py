@@ -266,9 +266,48 @@ async def healthz(request: Request) -> Response:
     return PlainTextResponse("agate-not-listening\n", status_code=503)
 
 
+def _owner_only(request: Request) -> None:
+    """Reject the request unless OpenHost forwarded an authenticated
+    owner. OpenHost adds ``X-OpenHost-Is-Owner: true`` to proxied
+    requests when the JWT's ``sub`` claim is ``owner`` (see
+    ``compute_space.web.routes.proxy._identity_headers``). Anonymous
+    requests reach us without the header, so we use its presence as
+    a clean owner-vs-public signal.
+
+    We must do this auth check ourselves rather than relying on
+    OpenHost's ``public_paths`` filter because the matcher treats
+    ``/`` as a prefix that matches every URL. We therefore declare
+    the entire app public to OpenHost (so the unauth landing page
+    works) and gate the editor and file API in this sidecar.
+
+    For requests that don't pass through OpenHost (e.g. someone
+    addressing the container's localhost port directly), the header
+    is absent, so this still defaults to deny.
+    """
+    if request.headers.get("X-OpenHost-Is-Owner", "").lower() != "true":
+        # Mirror OpenHost's behaviour for unauth requests on private
+        # paths: redirect HTML clients to the OpenHost sign-in page.
+        # For API clients (XHR / fetch) a 401 with a JSON body is
+        # more useful than a 302.
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            # OpenHost-derived host; build /login on the bare
+            # zone domain via the X-Forwarded-Host header it sets.
+            zone = request.headers.get("X-Forwarded-Host", "")
+            if zone:
+                # Strip the app subdomain so we land on the bare
+                # zone's /login page (matches OpenHost's own auth
+                # redirect target).
+                bare = zone.split(".", 1)[1] if "." in zone else zone
+                login_url = f"https://{bare}/login"
+                raise HTTPException(302, headers={"location": login_url})
+        raise HTTPException(401, "this route requires an OpenHost session")
+
+
 async def edit_page(request: Request) -> HTMLResponse:
     """Serve the editor shell. The actual content + file list is
     populated by ``editor.js`` calling ``/api/files``."""
+    _owner_only(request)
     try:
         template = (TEMPLATES_DIR / "editor.html").read_text(encoding="utf-8")
     except OSError as exc:
@@ -281,10 +320,12 @@ async def edit_page(request: Request) -> HTMLResponse:
 
 
 async def list_files(request: Request) -> JSONResponse:
+    _owner_only(request)
     return JSONResponse({"files": _list_gmi_files()})
 
 
 async def get_file(request: Request) -> JSONResponse:
+    _owner_only(request)
     rel = request.path_params["rel"]
     path = _resolve_content_path(rel)
     # is_symlink first: Path.is_file follows symlinks, so a symlink to
@@ -347,6 +388,7 @@ async def put_file(request: Request) -> JSONResponse:
     """Overwrite an existing file. Will not create a new file -- use
     POST for that, so accidental misspellings of an existing path
     don't silently create a stray file."""
+    _owner_only(request)
     rel = request.path_params["rel"]
     path = _resolve_content_path(rel)
     if not path.exists():
@@ -399,6 +441,7 @@ async def post_file(request: Request) -> JSONResponse:
     """Create a new file. Will not overwrite an existing file -- use
     PUT for that. Creates intermediate directories as needed (still
     confined to CONTENT_DIR by ``_resolve_content_path``)."""
+    _owner_only(request)
     rel = request.path_params["rel"]
     path = _resolve_content_path(rel)
     if path.exists():
@@ -421,6 +464,7 @@ async def post_file(request: Request) -> JSONResponse:
 
 
 async def delete_file(request: Request) -> Response:
+    _owner_only(request)
     rel = request.path_params["rel"]
     path = _resolve_content_path(rel)
     if not path.exists():
@@ -437,7 +481,13 @@ async def delete_file(request: Request) -> Response:
 # ----------------------------------------------------------------- error handler
 
 async def http_exception_handler(request: Request, exc: HTTPException) -> Response:
-    """Return JSON for /api/* errors, plain text for everything else."""
+    """Return JSON for /api/* errors, plain text for other errors,
+    and a redirect (no body) for 3xx with a ``location`` header."""
+    # 3xx redirects only need the Location header; do not write the
+    # detail string into the body.
+    if 300 <= exc.status_code < 400:
+        location = (exc.headers or {}).get("location", "")
+        return Response(status_code=exc.status_code, headers={"location": location})
     if request.url.path.startswith("/api/"):
         return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
     return PlainTextResponse(str(exc.detail) + "\n", status_code=exc.status_code)
