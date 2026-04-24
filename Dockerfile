@@ -60,11 +60,13 @@ COPY sidecar/ /usr/local/share/openhost-gemini/sidecar/
 COPY default_content/ /usr/local/share/openhost-gemini/default_content/
 RUN chmod +x /usr/local/bin/start.sh
 
-# Create an unprivileged user for agate to drop to. Agate itself does
-# not daemonise or drop privileges, so running as root would be
-# unnecessary exposure. Rootless podman remaps uids anyway; this stays
-# correct under both runtimes.
-RUN useradd --system --no-create-home --shell /usr/sbin/nologin agate
+# We run agate and the sidecar as the container's root user. Under
+# rootless podman (the OpenHost runtime) "root" inside the container
+# is mapped to an unprivileged host uid, so this is not a privilege
+# escalation; and it sidesteps the rootless-volume ownership issue
+# where the OpenHost-mounted persistent volume arrives owned by host
+# root and a different in-container user cannot read it. See
+# start.sh for the full rationale.
 
 # :8080 is the HTTP landing/health/editor port (reached via the
 # OpenHost router; gated by OpenHost session auth). :1965 is the

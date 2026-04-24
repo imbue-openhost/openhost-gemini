@@ -133,5 +133,7 @@ disk); your edits survive container rebuilds.
   sign-in redirect.
 - The file API rejects path traversal, absolute paths, symlinks, and
   any extension other than `.gmi`. Bodies are capped at 1 MiB.
-- The container runs agate as an unprivileged `agate` system user;
-  no extra Linux capabilities are requested.
+- The container runs agate as the in-container root user; under the
+  OpenHost rootless-podman runtime this maps to an unprivileged host
+  uid, so it is not a privilege escalation. No extra Linux
+  capabilities are requested.

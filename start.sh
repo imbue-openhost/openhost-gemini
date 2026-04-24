@@ -83,15 +83,24 @@ else
 fi
 
 # Agate's auto-cert-generation writes to $CERTS_DIR/<hostname>/. We
-# let it do so rather than pre-generating with openssl: it picks up
-# the same hostname we pass via --hostname, uses ECDSA P-256 by
+# let it do so rather than pre-generating with openssl: agate picks
+# up the same hostname we pass via --hostname, uses ECDSA P-256 by
 # default, and writes cert.pem + key.pem alongside a small state
 # file. If an operator drops in their own pair they just have to
 # place a cert.pem + key.pem under $CERTS_DIR/<hostname>/ and
 # restart the container.
-if ! chown -R agate:agate "$DATA_DIR" 2>/dev/null; then
-    log "warning: chown -R agate:agate $DATA_DIR failed (expected under rootless podman); continuing"
-fi
+#
+# We deliberately run agate (and the sidecar) as the container's
+# root user rather than dropping to a separate `agate` system user.
+# Under rootless podman the container "root" is already mapped to
+# an unprivileged host uid, so this is not a privilege escalation;
+# and it sidesteps the rootless-volume ownership problem -- the
+# OpenHost-mounted persistent volume comes in owned by the host
+# root, which the container "root" can read and write but a
+# different in-container user cannot. (Apps that create all their
+# state from scratch -- e.g. xmpp's prosody storing accounts in a
+# fresh sqlite db -- can run as a non-root user; we read seeded
+# .gmi files written by start.sh, so the simpler approach wins.)
 
 # --- supervise both children ------------------------------------------
 #
@@ -125,14 +134,13 @@ log "starting agate for $HOSTNAME on :1965"
 # through DNS + OpenHost's publish will still carry the public
 # port. With the current openhost.toml this is harmless; leaving
 # the flag on keeps things robust if the mapping ever changes.
-runuser -u agate -g agate -- \
-    /usr/local/bin/agate \
-        --hostname "$HOSTNAME" \
-        --content "$CONTENT_DIR" \
-        --certs "$CERTS_DIR" \
-        --addr '0.0.0.0:1965' \
-        --skip-port-check \
-        --log-ip &
+/usr/local/bin/agate \
+    --hostname "$HOSTNAME" \
+    --content "$CONTENT_DIR" \
+    --certs "$CERTS_DIR" \
+    --addr '0.0.0.0:1965' \
+    --skip-port-check \
+    --log-ip &
 AGATE_PID=$!
 
 # `set -e` is deliberately off around wait -n so a non-zero child
