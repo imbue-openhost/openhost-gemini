@@ -80,10 +80,12 @@ container rebuilds.
 
 ## Security
 
-- The Gemini port is publicly reachable with no OpenHost auth gate.
-  Do not put anything sensitive in the content dir.
-- The HTTP landing page at `/` is in `public_paths`, so it is
-  reachable without a signed-in OpenHost session. Only a static
-  page describing how to browse the capsule is served there.
+- The Gemini port (1965) is publicly reachable with no OpenHost auth
+  gate -- this is the normal access model for a Gemini capsule. Do
+  not put anything sensitive in the content dir.
+- The HTTP landing page at `https://<app-name>.<zone>/` is gated
+  behind the OpenHost session (no `public_paths`), so only the
+  compute-space owner sees it. Random web visitors that stumble
+  onto the HTTP side get OpenHost's standard sign-in redirect.
 - The container runs agate as an unprivileged `agate` system user;
   no extra Linux capabilities are requested.

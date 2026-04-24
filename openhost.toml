@@ -24,12 +24,11 @@ container_port = 1965
 host_port = 1965
 
 [routing]
-# The HTTP landing page explains how to point a Gemini client at
-# the capsule; no user state is reachable without a signed-in
-# OpenHost session, but the description itself is fine to serve
-# unauthenticated so visitors who stumble onto the HTTP side know
-# where to go.
-public_paths = ["/"]
+# The HTTP landing page is gated behind the OpenHost session so only
+# the compute-space owner sees it. The capsule itself (the Gemini
+# protocol on :1965) is publicly reachable without OpenHost auth --
+# that's the normal Gemini access model -- but the HTTP-side info
+# page does not need to be world-readable.
 health_check = "/healthz"
 
 [resources]
