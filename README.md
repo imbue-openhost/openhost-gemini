@@ -15,6 +15,8 @@ with a built-in WYSIWYG editor for the capsule's gemtext pages.
 - A WYSIWYG gemtext editor at `https://<app-name>.<zone-domain>/edit`
   for managing the capsule's pages from the browser. Behind the
   OpenHost session, so only the compute-space owner can use it.
+  The owner sees an extra "Open editor" card on the landing page
+  for discoverability; anonymous visitors don't.
 - Persistent content under `$OPENHOST_APP_DATA_DIR/content/` that
   you edit via the editor or the file-browser app.
 - A self-signed TLS certificate, auto-generated on first boot and
@@ -50,8 +52,13 @@ OpenHost session.
 
 ## Editor
 
-The editor at `/edit` is a contenteditable WYSIWYG host that maps
-gemtext line shapes one-to-one to DOM blocks:
+When you're signed in as the compute-space owner, the public
+landing page at `https://<app-name>.<zone-domain>/` grows an extra
+"Open editor" card. Click it (or visit `/edit` directly) to open
+the editor.
+
+The editor is a contenteditable WYSIWYG host that maps gemtext
+line shapes one-to-one to DOM blocks:
 
 | Gemtext   | Editor block    |
 |-----------|-----------------|
@@ -68,6 +75,13 @@ Use the toolbar to change a block's shape. The "View source" button
 shows the current gemtext that will be saved. Save commits the file
 to disk; agate re-reads it on the next request, so changes are live
 without a restart.
+
+Pasting from a webpage, Markdown preview, or word processor works:
+the editor intercepts the paste, parses the clipboard HTML, and
+inserts proper gemtext blocks (headings, lists, paragraphs, links,
+quotes, preformatted) instead of dumping raw HTML into the
+contenteditable. Inline links in pasted prose become "label (URL)"
+text rather than getting dropped, so URLs survive the paste.
 
 The file API the editor uses is also addressable directly:
 

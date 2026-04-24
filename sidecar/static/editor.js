@@ -243,6 +243,7 @@ class Editor {
         this.statusEl = statusEl;
         this.host.addEventListener("keydown", (e) => this.onKeydown(e));
         this.host.addEventListener("input", () => this.markDirty());
+        this.host.addEventListener("paste", (e) => this.onPaste(e));
         this.dirty = false;
         this.path = null;
     }
@@ -355,6 +356,365 @@ class Editor {
         sel.addRange(range);
         this.markDirty();
     }
+
+    // Intercept paste so a copy from a webpage / Markdown preview /
+    // word processor lands as proper editor blocks instead of a
+    // verbatim HTML dump that breaks the gemtext-shape model.
+    //
+    // The contenteditable host's default paste handling pastes
+    // arbitrary HTML (or sometimes plain text, depending on the
+    // browser) into the current block. That produces nested <span>s,
+    // colour styles, fonts, and inline formatting that have no
+    // gemtext equivalent and that survive in the DOM long enough to
+    // break the next save's serialize step. By intercepting paste we
+    // map clipboard content to gemtext-shape blocks and replace the
+    // current selection with those.
+    //
+    // Strategy:
+    //   1. If the clipboard has text/html, parse it with
+    //      DOMParser and walk its block-level descendants, mapping
+    //      each to a gemtext record (or a sequence of records).
+    //   2. If only text/plain is present, run it through the
+    //      gemtext parser directly: any text the user pastes is
+    //      treated as if they typed gemtext, so the existing
+    //      shape detection (`#`, `*`, `=>`, etc.) works.
+    //   3. If we end up with no records, fall back to the browser's
+    //      default plain-text paste so users don't lose their
+    //      clipboard mid-operation.
+    onPaste(e) {
+        const cd = e.clipboardData;
+        if (!cd) return; // Edge cases (Safari quirks); fall through to default.
+        const html = cd.getData("text/html");
+        const text = cd.getData("text/plain");
+        let records = [];
+        if (html && html.trim()) {
+            records = htmlToRecords(html);
+        }
+        if (records.length === 0 && text) {
+            records = parseGemtext(text);
+        }
+        if (records.length === 0) return; // Image-only paste, etc.
+        e.preventDefault();
+        this.insertRecordsAtSelection(records);
+        this.markDirty();
+    }
+
+    // Replace the current selection with a sequence of gemtext records,
+    // mapping each to its corresponding editor block. We split the
+    // current block at the caret if the paste happens mid-text:
+    //   - Text before the caret stays in the current block.
+    //   - Pasted records get inserted as new blocks after it.
+    //   - Text after the caret moves into a trailing paragraph block.
+    insertRecordsAtSelection(records) {
+        const block = this.currentBlock();
+        if (!block) {
+            // Caret is outside any block (empty editor, etc.). Just
+            // append the records at the end.
+            for (const r of records) this.host.appendChild(blockFor(r));
+            return;
+        }
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) {
+            // Selection lost (rare). Insert after the current block.
+            const after = block.nextSibling;
+            for (const r of records) {
+                const node = blockFor(r);
+                this.host.insertBefore(node, after);
+            }
+            return;
+        }
+        // Split the current block at the caret. We capture the text
+        // before/after the caret as plain strings; for non-plain
+        // shapes (link, list, pre) we don't try to be clever -- the
+        // caret-position split only really makes sense for paragraph
+        // / heading / quote shapes. For those special shapes we
+        // insert the new blocks AFTER the current one without
+        // splitting.
+        const range = sel.getRangeAt(0);
+        // Drop any selection content that the paste replaces.
+        if (!range.collapsed) range.deleteContents();
+        const shape = block.dataset.shape;
+        const splittable = shape === Lines.P || shape === Lines.H1 ||
+                           shape === Lines.H2 || shape === Lines.H3 ||
+                           shape === Lines.QUOTE;
+        let insertAfter = block;
+        if (splittable) {
+            // Walk the block's text content, splitting at the caret.
+            const before = document.createRange();
+            before.selectNodeContents(block);
+            before.setEnd(range.startContainer, range.startOffset);
+            const beforeText = before.toString();
+
+            const after = document.createRange();
+            after.selectNodeContents(block);
+            after.setStart(range.startContainer, range.startOffset);
+            const afterText = after.toString();
+
+            // Preserve the original block, now containing only the
+            // text before the caret. If that's empty, replace it
+            // with a placeholder paragraph rather than leaving a
+            // visually-empty heading/quote.
+            block.textContent = beforeText;
+            if (beforeText === "" && shape !== Lines.P) {
+                const placeholder = blockFor({shape: Lines.P, text: ""});
+                block.replaceWith(placeholder);
+                insertAfter = placeholder;
+            }
+            // The "after" text becomes a fresh paragraph block AFTER
+            // the pasted records, so the user's caret naturally lands
+            // back in their original text once the paste settles.
+            if (afterText !== "") {
+                const tail = blockFor({shape: Lines.P, text: afterText});
+                // Defer adding tail until after the pasted records.
+                this._pendingTail = tail;
+            }
+        }
+        // Insert each pasted record after the (possibly split) block.
+        let cursor = insertAfter;
+        for (const r of records) {
+            const node = blockFor(r);
+            cursor.after(node);
+            cursor = node;
+        }
+        if (this._pendingTail) {
+            cursor.after(this._pendingTail);
+            cursor = this._pendingTail;
+            this._pendingTail = null;
+        }
+        // Place the cursor at the end of the last inserted block so
+        // the user can keep typing.
+        const finalRange = document.createRange();
+        finalRange.selectNodeContents(cursor);
+        finalRange.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(finalRange);
+    }
+}
+
+// ------------------------------------------------------------- HTML -> records
+//
+// Map a pasted HTML fragment to gemtext records. We do not try to
+// preserve inline formatting (bold/italic/code spans) because gemtext
+// has no inline markup; instead we collapse each block-level element
+// to plain text and pick the closest gemtext shape:
+//
+//   <h1..h3>          -> Heading 1..3
+//   <h4..h6>          -> Heading 3 (clamped)
+//   <p>, <div>, plain -> Paragraph
+//   <li>              -> List item
+//   <blockquote>      -> Quote
+//   <pre>             -> Preformatted
+//   <a> at block top  -> Link block (one record)
+//   <a> inside text   -> Inlined as "text (URL)" so we don't lose URLs
+//   <hr>              -> Empty paragraph (visual separator)
+//   <br>              -> Splits the surrounding block into two records
+//   <img>             -> Link block to the image's src (gemtext doesn't
+//                         do inline images; a link is the closest
+//                         analogue clients render usefully)
+//
+// Unknown elements are descended into so a <article><p>...</p></article>
+// still produces the inner paragraph.
+export function htmlToRecords(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const out = [];
+    walkBlock(doc.body, out);
+    return collapseEmpty(out);
+}
+
+// Some sources (Word, Google Docs) wrap everything in repeated empty
+// paragraphs. Strip leading and trailing empties and collapse runs of
+// 2+ empty paragraphs to a single one so the pasted content reads
+// cleanly.
+function collapseEmpty(records) {
+    const trimmed = records.slice();
+    while (trimmed.length && isEmptyP(trimmed[0])) trimmed.shift();
+    while (trimmed.length && isEmptyP(trimmed[trimmed.length - 1])) trimmed.pop();
+    const out = [];
+    let lastWasEmpty = false;
+    for (const r of trimmed) {
+        const empty = isEmptyP(r);
+        if (empty && lastWasEmpty) continue;
+        out.push(r);
+        lastWasEmpty = empty;
+    }
+    return out;
+}
+
+function isEmptyP(r) {
+    return r && r.shape === Lines.P && (!r.text || !r.text.trim());
+}
+
+// Walk an element's children, emitting records as we go. The function
+// looks at the element's tag and dispatches to the appropriate
+// converter. For unknown tags we just recurse so a wrapping <div>
+// doesn't swallow its descendants.
+function walkBlock(el, out) {
+    if (!el) return;
+    for (const child of el.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE) {
+            const text = child.textContent.replace(/\s+/g, " ");
+            if (text.trim()) {
+                // Loose text directly under the body / a wrapper:
+                // promote to a paragraph.
+                appendOrExtendParagraph(out, text);
+            }
+            continue;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) continue;
+        const tag = child.tagName.toLowerCase();
+        switch (tag) {
+            case "h1":
+                out.push({shape: Lines.H1, text: blockText(child)});
+                break;
+            case "h2":
+                out.push({shape: Lines.H2, text: blockText(child)});
+                break;
+            case "h3":
+            case "h4":
+            case "h5":
+            case "h6":
+                out.push({shape: Lines.H3, text: blockText(child)});
+                break;
+            case "blockquote":
+                // Multi-line blockquotes become one quote record per
+                // visible line so each maps cleanly to a `>` line in
+                // gemtext.
+                for (const line of blockTextLines(child)) {
+                    out.push({shape: Lines.QUOTE, text: line});
+                }
+                break;
+            case "ul":
+            case "ol":
+                for (const li of child.querySelectorAll(":scope > li")) {
+                    out.push({shape: Lines.LIST, text: blockText(li)});
+                }
+                break;
+            case "li":
+                // Stray <li> outside a list: still represent as a list item.
+                out.push({shape: Lines.LIST, text: blockText(child)});
+                break;
+            case "pre":
+                out.push({shape: Lines.PRE, alt: "", body: child.textContent.replace(/\n+$/, "")});
+                break;
+            case "p":
+            case "div":
+            case "section":
+            case "article":
+            case "main":
+            case "aside":
+            case "header":
+            case "footer":
+                // Block-level wrappers: collect their text as a
+                // paragraph (or recurse if they contain block-level
+                // children themselves -- common with Google Docs
+                // dumps).
+                if (containsBlockChild(child)) {
+                    walkBlock(child, out);
+                } else {
+                    const text = blockText(child);
+                    if (text) out.push({shape: Lines.P, text});
+                }
+                break;
+            case "br":
+                // Hard line break: end the current paragraph if any.
+                appendOrExtendParagraph(out, "\n");
+                break;
+            case "hr":
+                out.push({shape: Lines.P, text: ""});
+                break;
+            case "a": {
+                // A bare link at block level becomes its own link block.
+                // A link surrounded by other inline content stays inline
+                // -- handled by blockText in the parent walk -- so we
+                // only get here when <a> is a direct child of body /
+                // a wrapper.
+                const url = (child.getAttribute("href") || "").trim();
+                const label = blockText(child);
+                if (url) out.push({shape: Lines.LINK, url, label});
+                else if (label) appendOrExtendParagraph(out, label);
+                break;
+            }
+            case "img": {
+                const src = (child.getAttribute("src") || "").trim();
+                const alt = (child.getAttribute("alt") || "").trim();
+                if (src) out.push({shape: Lines.LINK, url: src, label: alt || "image"});
+                break;
+            }
+            case "script":
+            case "style":
+            case "head":
+            case "meta":
+            case "link":
+                // Drop entirely. (Browsers paste these in some cases.)
+                break;
+            default:
+                // Anything else: treat as a wrapper and recurse.
+                walkBlock(child, out);
+        }
+    }
+}
+
+// Append text to the last record if it's a paragraph still being
+// built; otherwise start a new paragraph. Used for stray text and <br>.
+function appendOrExtendParagraph(out, text) {
+    const last = out[out.length - 1];
+    if (last && last.shape === Lines.P) {
+        last.text = (last.text + text).replace(/\s+/g, " ").trim();
+    } else {
+        const cleaned = text.replace(/\s+/g, " ").trim();
+        if (cleaned) out.push({shape: Lines.P, text: cleaned});
+    }
+}
+
+// Extract a single line of plain text from an element, with inline
+// links rendered as "label (url)" so URLs aren't lost. Whitespace is
+// collapsed to single spaces (gemtext is line-oriented; soft wraps
+// from the source HTML are noise).
+function blockText(el) {
+    let out = "";
+    for (const node of el.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            out += node.textContent;
+            continue;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        const tag = node.tagName.toLowerCase();
+        if (tag === "a") {
+            const url = (node.getAttribute("href") || "").trim();
+            const label = blockText(node);
+            if (url && label && url !== label) {
+                out += `${label} (${url})`;
+            } else {
+                out += label || url;
+            }
+            continue;
+        }
+        if (tag === "br") {
+            out += " ";
+            continue;
+        }
+        if (tag === "img") {
+            const alt = (node.getAttribute("alt") || "").trim();
+            if (alt) out += alt;
+            continue;
+        }
+        if (tag === "script" || tag === "style") continue;
+        out += blockText(node);
+    }
+    return out.replace(/\s+/g, " ").trim();
+}
+
+// Like blockText but splits on <br> so a multi-line <blockquote>
+// turns into separate quote records.
+function blockTextLines(el) {
+    const html = el.innerHTML.replace(/<br\s*\/?>/gi, "\n");
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    return tmp.textContent.split(/\n+/).map(s => s.trim()).filter(Boolean);
+}
+
+function containsBlockChild(el) {
+    return !!el.querySelector(":scope > p, :scope > div, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > ul, :scope > ol, :scope > pre, :scope > blockquote, :scope > section, :scope > article");
 }
 
 // ----------------------------------------------------------------- API client

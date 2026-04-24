@@ -247,16 +247,62 @@ _LANDING_TEMPLATE = """<!doctype html>
        JavaScript, no tracking, no ads, and the markup language
        (gemtext) has six line shapes total. Read more at the
        <a href="https://geminiprotocol.net/">Gemini protocol site</a>.</p>
-  </div>
+  </div>{owner_section}
 </body>
 </html>
 """
 
+# Extra section appended to the landing page only for an authenticated
+# owner. We render it conditionally so anonymous visitors never see
+# editor hints (and never even learn the editor exists), while the
+# compute-space owner gets a clear path into the editor without
+# having to memorise the /edit URL. The "Edit your capsule" call to
+# action is the natural counterpart to the public "this is what
+# Gemini is" cards above.
+_OWNER_SECTION = """
+
+  <div class="card owner-card">
+    <h2>You're signed in as the owner</h2>
+    <p>Edit your capsule's pages with the built-in WYSIWYG editor:</p>
+    <p><a class="cta" href="/edit">Open editor</a></p>
+    <p style="color:#8b949e; font-size:0.9em;">Only you see this card. Anonymous visitors get the public landing page above without any editor links.</p>
+  </div>
+"""
+
+# CSS for the owner card / button. We append this to the existing
+# style block when rendering for an owner so the public template
+# stays byte-identical to anonymous visitors.
+_OWNER_STYLE = """
+    .owner-card { border-color: #1f6feb; }
+    .cta {
+      display: inline-block; background:#1f6feb; color:#fff;
+      text-decoration: none; padding: 8px 16px; border-radius: 6px;
+      font-weight: 600;
+    }
+    .cta:hover { background:#388bfd; }
+"""
+
+
+def _is_owner(request: Request) -> bool:
+    """Return True when OpenHost forwarded the X-OpenHost-Is-Owner
+    header on the proxied request. Used by the public landing page to
+    inject an owner-only "Edit" affordance; the actual auth boundary
+    on /edit and /api/files/* is enforced by ``_owner_only``."""
+    return request.headers.get("X-OpenHost-Is-Owner", "").lower() == "true"
+
 
 async def landing(request: Request) -> HTMLResponse:
+    owner = _is_owner(request)
+    owner_section = _OWNER_SECTION if owner else ""
     body = _LANDING_TEMPLATE.format(
         host=html.escape(_safe_hostname(), quote=True),
+        owner_section=owner_section,
     )
+    if owner:
+        # Append the owner-card styles. Inserting just before the
+        # closing </style> keeps the existing rules intact and avoids
+        # a separate <style> block.
+        body = body.replace("</style>", _OWNER_STYLE + "  </style>", 1)
     return HTMLResponse(body, headers={"Cache-Control": "no-store"})
 
 
