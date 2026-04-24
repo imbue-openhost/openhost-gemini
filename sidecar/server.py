@@ -14,7 +14,12 @@ Three jobs:
    re-reads files on the next request, so changes are live without a
    restart.
 
-Run via ``uvicorn server:app --host 0.0.0.0 --port $STATUS_PORT``.
+Run as ``start.sh`` does in the container::
+
+    cd sidecar
+    python3 -m uvicorn server:app --host 0.0.0.0 --port "$STATUS_PORT"
+
+Outside the container, install ``sidecar/requirements.txt`` first.
 """
 
 from __future__ import annotations
@@ -22,13 +27,13 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import logging
 import os
 import re
 import socket
+import tempfile
 from pathlib import Path
 from typing import Any
-from typing import Awaitable
-from typing import Callable
 
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -39,6 +44,8 @@ from starlette.responses import PlainTextResponse
 from starlette.responses import Response
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
+
+logger = logging.getLogger("openhost-gemini.sidecar")
 
 
 # ----------------------------------------------------------------- config
@@ -160,10 +167,12 @@ def _list_gmi_files() -> list[str]:
         try:
             if not entry.is_file():
                 continue
-        except OSError:
+        except OSError as exc:
             # A subtree we can't stat (e.g. permission flip mid-walk)
             # is not actionable; skip the entry rather than aborting
-            # the whole list.
+            # the whole list, but log so the operator can see why a
+            # file is missing from the editor.
+            logger.warning("skipping %s (cannot stat): %s", entry, exc)
             continue
         try:
             rel = entry.relative_to(CONTENT_DIR)
@@ -279,15 +288,18 @@ async def list_files(request: Request) -> JSONResponse:
 async def get_file(request: Request) -> JSONResponse:
     rel = request.path_params["rel"]
     path = _resolve_content_path(rel)
+    # is_symlink first: Path.is_file follows symlinks, so a symlink to
+    # a regular file would pass is_file and only get rejected by the
+    # symlink check; a symlink to a directory would raise the "not a
+    # regular file" error which is misleading. Refuse all symlinks
+    # uniformly so every symlinked path produces the same clear
+    # error, regardless of what it points at.
+    if path.is_symlink():
+        raise HTTPException(400, "symlinks are not editable")
     if not path.exists():
         raise HTTPException(404, f"no such file: {rel}")
     if not path.is_file():
         raise HTTPException(400, "path is not a regular file")
-    if path.is_symlink():
-        # Refuse to read through a symlink even if its target is inside
-        # CONTENT_DIR; symlinks don't round-trip cleanly through the
-        # editor and they widen the path-safety surface.
-        raise HTTPException(400, "symlinks are not editable")
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -354,15 +366,32 @@ async def put_file(request: Request) -> JSONResponse:
     # Atomic write: write to a sibling tempfile in the same dir then
     # replace, so a crash mid-write doesn't truncate the existing
     # file. ``Path.replace`` is atomic on the same filesystem.
-    tmp = path.with_suffix(path.suffix + ".partial")
+    #
+    # Use a per-call unique temp filename via tempfile.mkstemp so two
+    # concurrent saves of the same path don't clobber each other's
+    # ``.partial`` file. mkstemp creates the file atomically so there
+    # is no TOCTOU window either.
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".partial",
+        dir=str(path.parent),
+    )
+    tmp_path = Path(tmp_name)
     try:
-        tmp.write_text(content, encoding="utf-8")
-        tmp.replace(path)
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        tmp_path.replace(path)
     except OSError as exc:
+        # Best-effort cleanup; if even the unlink fails we log so the
+        # operator at least sees the orphan temp file rather than
+        # discovering it later by accident.
         try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+            tmp_path.unlink(missing_ok=True)
+        except OSError as cleanup_exc:
+            logger.warning(
+                "failed to write %s and could not remove temp %s: %s",
+                path, tmp_path, cleanup_exc,
+            )
         raise HTTPException(500, f"failed to write: {exc}")
     return JSONResponse({"path": rel, "bytes": len(content.encode("utf-8"))})
 
@@ -431,7 +460,7 @@ routes = [
     Route("/api/files/{rel:path}", delete_file, methods=["DELETE"]),
 ]
 
-app: Callable[..., Awaitable[None]] = Starlette(
+app: Starlette = Starlette(
     debug=False,
     routes=routes,
     exception_handlers={HTTPException: http_exception_handler},

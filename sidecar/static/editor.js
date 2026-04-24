@@ -377,11 +377,15 @@ function encodePath(p) {
 async function apiFetch(url, opts = {}, parse = "json") {
     const r = await fetch(url, {credentials: "same-origin", ...opts});
     if (!r.ok) {
-        let detail = "";
+        // Best-effort body read so the thrown error includes the
+        // server's message. If the read itself fails (network blip,
+        // body already consumed) note that, rather than producing
+        // an empty-detail error that's harder to debug.
+        let detail;
         try {
             detail = await r.text();
-        } catch (_) {
-            // Body already consumed or network error; nothing to add.
+        } catch (readErr) {
+            detail = `(could not read response body: ${readErr.message})`;
         }
         throw new Error(`${r.status} ${r.statusText}: ${detail}`);
     }
@@ -480,12 +484,17 @@ async function init() {
 
     document.getElementById("btn-save").addEventListener("click", async () => {
         if (!currentFile) return;
+        // Serialize once and reuse: the validation re-parse and the
+        // network save both want the same body string, and the DOM
+        // can't change between them.
+        const body = editor.serialize();
         // Pre-save validation: an empty link URL would serialize to
         // `=> ` which is invalid per the Gemini spec and silently
         // dropped or mis-rendered by clients. Refuse the save and
         // tell the user instead.
-        const records = parseGemtext(editor.serialize());
-        const badLink = records.find(r => r.shape === Lines.LINK && !r.url.trim());
+        const badLink = parseGemtext(body).find(
+            r => r.shape === Lines.LINK && !r.url.trim()
+        );
         if (badLink) {
             editor.setStatus(
                 "Cannot save: a link block has an empty URL. Fill it in or change the block to a paragraph.",
@@ -494,7 +503,6 @@ async function init() {
             return;
         }
         try {
-            const body = editor.serialize();
             await saveFile(currentFile, body);
             editor.markSaved();
         } catch (err) {
