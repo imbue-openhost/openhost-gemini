@@ -1,0 +1,16 @@
+# About this capsule
+
+This capsule is running the openhost-gemini app on an OpenHost compute
+space. The code lives at:
+
+=> https://github.com/imbue-openhost/openhost-gemini
+
+## What's serving this
+
+* Agate -- a minimal Rust implementation of the Gemini protocol.
+* Running in a Debian slim container.
+* Self-signed TLS certificate, auto-generated on first boot.
+* Content served from the persistent volume mounted at
+  $OPENHOST_APP_DATA_DIR/content inside the container.
+
+=> / Back to the index

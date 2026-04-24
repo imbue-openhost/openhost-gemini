@@ -1,0 +1,27 @@
+# Editing this capsule
+
+The server reads .gmi files directly off disk -- no rebuild required
+after editing. There are two ways to change what this capsule serves:
+
+## 1. File-browser app (easy)
+
+If you have the openhost-filestash (or equivalent) file-browser app
+installed in this compute space, open it and navigate to the
+"gemini" app's data directory. You'll find a "content/" folder with
+the .gmi files you see here. Edit, save, refresh your Gemini client.
+
+## 2. oh app exec (power user)
+
+You can edit files directly from the shell using the OpenHost CLI:
+
+```
+oh app exec gemini -- sh -c 'cat > /data/app_data/gemini/content/index.gmi'
+```
+
+(Paste your new content, Ctrl-D.)
+
+## gemtext reference
+
+=> gemini://geminiprotocol.net/docs/gemtext-specification.gmi The official gemtext spec
+
+=> / Back to the index

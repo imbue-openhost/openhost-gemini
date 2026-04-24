@@ -1,0 +1,46 @@
+[app]
+name = "gemini"
+version = "0.1.0"
+description = "Agate-based Gemini protocol server (TCP 1965, self-signed TLS)"
+authors = ["Andrew Laack <andrew@laack.co>"]
+
+[runtime.container]
+# The OpenHost router proxies HTTP traffic for `gemini.<zone>/` to this
+# port. The Gemini protocol itself lives on :1965 (declared in the
+# `[[ports]]` entry below) and bypasses the router entirely, so this
+# HTTP port only serves a tiny status/landing sidecar explaining how to
+# browse the capsule.
+image = "Dockerfile"
+port = 8080
+
+# The Gemini port. RFC-standard for Gemini is TCP 1965; published
+# directly by OpenHost on 0.0.0.0 so that public Gemini clients
+# reach it without going through the HTTP router. Gemini is a
+# raw-TLS protocol (no STARTTLS, no HTTP upgrade), so OpenHost's
+# :443 Caddy front-door cannot terminate it.
+[[ports]]
+label = "gemini"
+container_port = 1965
+host_port = 1965
+
+[routing]
+# The HTTP landing page explains how to point a Gemini client at
+# the capsule; no user state is reachable without a signed-in
+# OpenHost session, but the description itself is fine to serve
+# unauthenticated so visitors who stumble onto the HTTP side know
+# where to go.
+public_paths = ["/"]
+health_check = "/healthz"
+
+[resources]
+# Agate is tiny (Rust, single binary). 128 MiB is plenty even with
+# a few hundred cached pages in kernel page cache; bump if you plan
+# to run a large capsule.
+memory_mb = 128
+cpu_millicores = 100
+
+[data]
+# Persistent volume holds:
+#   - certs/<hostname>.crt, certs/<hostname>.key  (self-signed on first boot)
+#   - content/                                     (gemtext files served by agate)
+app_data = true
